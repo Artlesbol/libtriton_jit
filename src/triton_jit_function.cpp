@@ -192,3 +192,8 @@ template class triton_jit::TritonJITFunctionImpl<triton_jit::HcuBackend>;
 #include "triton_jit/backends/mlu_backend.h"
 template class triton_jit::TritonJITFunctionImpl<triton_jit::MluBackend>;
 #endif
+
+#ifdef BACKEND_PPU
+#include "triton_jit/backends/ppu_backend.h"
+template class triton_jit::TritonJITFunctionImpl<triton_jit::PpuBackend>;
+#endif
