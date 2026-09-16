@@ -457,6 +457,7 @@ def _compile_a_kernel(
     num_stages: int = 3,
     device_id: int = 0,
     extra_options: dict = None,
+    compile_target=None,
 ) -> Tuple[str, str]:
     """compile a kernel."""
     # static signature
@@ -605,7 +606,9 @@ def _compile_a_kernel(
     backend = get_backend()
     if backend in ["NPU", "MUSA", "MTGPU", "MACA", "GCU"]:
         # NPU/MUSA/MTGPU/MACA/GCU: no CUDA device context manager
-        target = triton.runtime.driver.active.get_current_target()
+        # Use a known target without querying the active Torch device.
+        target = (compile_target if compile_target is not None
+                  else triton.runtime.driver.active.get_current_target())
         ccinfo = triton.compile(src, target=target, options=opts)
     elif backend in ["MLU"]:
         # torch_mlu only registers torch.mlu when initialization sees CPU.
@@ -741,7 +744,19 @@ def compile_a_kernel(
     num_stages: int = 3,
     device_id: int = 0,
     extra_options: dict = None,
+    compile_target=None,
 ):
+    """Compile a source function, optionally with a known native-backend target."""
+    if get_backend() == "MACA" and compile_target is not None:
+        try:
+            from triton.compiler import hint_manager
+        except ImportError:
+            pass  # Upstream Triton has no FlagTree hint manager.
+        else:
+            # FlagTree otherwise detects Torch's CUDA compatibility device,
+            # initializes its context and selects NVIDIA comment hints. Bind
+            # the isolated compiler to the actual target instead.
+            hint_manager._global_hint_manager = hint_manager.HintManager("maca")
     # get jit function
     source_path = Path(source_path)
     spec = importlib.util.spec_from_file_location(source_path.stem, source_path)
@@ -753,7 +768,8 @@ def compile_a_kernel(
     while not (type(fn) is triton.runtime.JITFunction):
         fn = fn.fn
 
-    return _compile_a_kernel(fn, signature, num_warps, num_stages, device_id, extra_options)
+    return _compile_a_kernel(fn, signature, num_warps, num_stages, device_id,
+                            extra_options, compile_target)
 
 
 if __name__ == "__main__":
