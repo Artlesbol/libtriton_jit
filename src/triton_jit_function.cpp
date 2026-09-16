@@ -47,6 +47,16 @@ static void ensure_initialized() {
     py::module_::import("os").attr("environ")["TRITON_JIT_BACKEND"] = BACKEND_NAME;
 
     std::string backend_name(BACKEND_NAME);
+    if (backend_name == "NPU") {
+      // Ascend's torch_npu import initializes the backend modules that
+      // torch._dynamo expects before Triton is imported by gen_ssig.py.
+      try {
+        py::module_::import("torch");
+        py::module_::import("torch_npu");
+      } catch (const py::error_already_set& e) {
+        std::cerr << "Warning: Failed to import torch_npu: " << e.what() << std::endl;
+      }
+    }
     if (backend_name == "mtgpu") {
       try {
         py::module_::import("torch_musa");
