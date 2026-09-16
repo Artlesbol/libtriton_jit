@@ -33,7 +33,9 @@ message(STATUS "Building with backend: ${BACKEND}")
 
 
 if(BACKEND STREQUAL "MACA")
-    if(DEFINED ENV{MACA_PATH} AND NOT "$ENV{MACA_PATH}" STREQUAL "")
+    if(DEFINED MACA_PATH AND NOT "${MACA_PATH}" STREQUAL "")
+        set(_MACA_PATH "${MACA_PATH}")
+    elseif(DEFINED ENV{MACA_PATH} AND NOT "$ENV{MACA_PATH}" STREQUAL "")
         set(_MACA_PATH "$ENV{MACA_PATH}")
     elseif(EXISTS "/opt/maca")
         set(_MACA_PATH "/opt/maca")
