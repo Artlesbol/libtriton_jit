@@ -435,42 +435,52 @@ class TritonJITFunctionImpl {
                             const std::string& full_signature,
                             void** args,
                             size_t num_args = 0) const {
+    CompileOptions copts;
+    copts.num_warps = static_cast<int>(num_warps);
+    copts.num_stages = static_cast<int>(num_stages);
+    launch_with_raw_args(stream, grid_x, grid_y, grid_z, copts, full_signature, args, num_args);
+  }
+
+  // CompileOptions overload for raw launches. The fast-path cache uses the same
+  // complete key as get_kernel(), so backend-specific options cannot reuse a
+  // binary compiled with different settings.
+  void launch_with_raw_args(typename Backend::StreamType stream,
+                            unsigned int grid_x,
+                            unsigned int grid_y,
+                            unsigned int grid_z,
+                            const CompileOptions& copts,
+                            const std::string& full_signature,
+                            void** args,
+                            size_t num_args = 0) const {
     // Cache kernel pointer per-signature/device to amortise get_kernel() lookup.
     // launch_with_raw_args is the hot path; avoid fmt::format + map lookup.
     using KernelPtr = const TritonKernelImpl<Backend>*;
     struct CacheEntry {
-      std::string full_signature;
+      std::string compile_key;
       int device_index = -1;
-      int num_warps = 0;
-      int num_stages = 0;
       KernelPtr kernel = nullptr;
     };
     thread_local static std::unordered_map<const TritonJITFunctionImpl*, CacheEntry> tl_cache;
     auto& entry = tl_cache[this];
     Backend::ensure_context();
     int device_index = Backend::get_device_index();
+    const std::string compile_key =
+        detail::make_kernel_cache_key(full_signature, device_index, copts);
     KernelPtr cached_kernel = nullptr;
     if (entry.kernel != nullptr && entry.device_index == device_index &&
-        entry.num_warps == static_cast<int>(num_warps) &&
-        entry.num_stages == static_cast<int>(num_stages) &&
-        entry.full_signature == full_signature) {
+        entry.compile_key == compile_key) {
       cached_kernel = entry.kernel;
     }
     if (cached_kernel == nullptr) {
-      CompileOptions copts;
-      copts.num_warps = static_cast<int>(num_warps);
-      copts.num_stages = static_cast<int>(num_stages);
       const TritonKernelImpl<Backend>& kernel =
           this->get_kernel(full_signature, copts, device_index);
       cached_kernel = &kernel;
-      entry.full_signature = full_signature;
+      entry.compile_key = compile_key;
       entry.device_index = device_index;
-      entry.num_warps = static_cast<int>(num_warps);
-      entry.num_stages = static_cast<int>(num_stages);
       entry.kernel = cached_kernel;
     }
     cached_kernel->launch_with_signature(
-        grid_x, grid_y, grid_z, num_warps, stream, args, full_signature, num_args);
+        grid_x, grid_y, grid_z, copts.num_warps, stream, args, full_signature, num_args);
   }
 
   /// Pre-compile the kernel without launching.
@@ -479,10 +489,16 @@ class TritonJITFunctionImpl {
                unsigned int num_warps,
                unsigned int num_stages,
                int device_index) const {
-    Backend::ensure_context();
     CompileOptions copts;
     copts.num_warps = static_cast<int>(num_warps);
     copts.num_stages = static_cast<int>(num_stages);
+    compile(std::move(full_signature), copts, device_index);
+  }
+
+  void compile(std::string full_signature,
+               const CompileOptions& copts,
+               int device_index) const {
+    Backend::ensure_context();
     this->get_kernel(full_signature, copts, device_index);
   }
 
