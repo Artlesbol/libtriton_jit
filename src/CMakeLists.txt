@@ -39,6 +39,14 @@ target_include_directories(triton_jit
 
 # Backend-specific link libraries
 if(BACKEND STREQUAL "NPU")
+    option(TRITON_JIT_NPU_VERBOSE_LAUNCH "Compile NPU verbose launch diagnostics" OFF)
+    if(NOT TRITON_JIT_NPU_VERBOSE_LAUNCH)
+        # Torch's non-glog headers default CAFFE2_LOG_THRESHOLD to INT_MIN.
+        # VLOG then constructs/format messages on every launch even when the
+        # runtime log level discards them. Keep INFO, warnings and errors;
+        # propagate the setting to consumers that instantiate our templates.
+        target_compile_definitions(triton_jit PUBLIC CAFFE2_LOG_THRESHOLD=0)
+    endif()
     target_link_libraries(triton_jit
       PUBLIC Torch::Torch Ascend::ascendcl Ascend::runtime fmt::fmt-header-only
       PRIVATE pybind11::embed)
