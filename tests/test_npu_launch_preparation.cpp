@@ -61,6 +61,8 @@ void check_preparation() {
   auto changed = NpuBackend::prepare_launch(dir, name, 0, "i64,*fp32", 2);
   require(changed.arg_layout->size() == 2 && (*changed.arg_layout)[0].type == NpuArgType::I64,
           "signature change reused stale options");
+  require(prepared.arg_layout->size() == 3 && (*prepared.arg_layout)[0].type == NpuArgType::POINTER,
+          "recursive signature preparation invalidated an in-flight layout");
   auto constants = NpuBackend::prepare_launch(dir, name, 0, "64,true,nullopt", 0);
   require(constants.arg_layout && constants.arg_layout->empty(), "constexpr-only ABI must be empty");
   dir = "/cpu-test/reused-object";

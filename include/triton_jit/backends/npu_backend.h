@@ -434,8 +434,11 @@ struct NpuBackend {
     };
     // TritonKernel owns dir. Validate values as well as its address so a
     // destroyed/moved kernel object cannot reuse another kernel's options.
-    thread_local static std::unordered_map<const std::string*, Prepared> cache;
-    auto& state = cache[&dir];
+    // Retain each signature's layout separately: an enter hook may prepare
+    // another signature recursively while its caller still owns LaunchOptions.
+    thread_local static std::unordered_map<
+        const std::string*, std::unordered_map<std::string, Prepared>> cache;
+    auto& state = cache[&dir][sig];
     if (!state.valid || state.dir != dir || state.name != name || state.signature != sig) {
       const auto* metadata = get_kernel_metadata(dir, name);
       if (metadata == nullptr || (sig.empty() && !metadata->has_arg_layout())) {
