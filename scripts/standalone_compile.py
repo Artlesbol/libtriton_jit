@@ -450,6 +450,14 @@ def _merge_compile_options(
     return opts
 
 
+def _compile_backend_ast(src, target, options, backend):
+    # FlagTree TLE installs its dialect/context hook on compiler.compile after
+    # Triton's top-level compile alias has been bound. Resolve the NPU entry at
+    # call time so DSA buffer/tile types see the context prepared by that hook.
+    compile_fn = triton.compiler.compile if backend == "NPU" else triton.compile
+    return compile_fn(src, target=target, options=options)
+
+
 def _compile_a_kernel(
     fn: triton.runtime.JITFunction,
     signature: str,
@@ -609,7 +617,7 @@ def _compile_a_kernel(
         # Use a known target without querying the active Torch device.
         target = (compile_target if compile_target is not None
                   else triton.runtime.driver.active.get_current_target())
-        ccinfo = triton.compile(src, target=target, options=opts)
+        ccinfo = _compile_backend_ast(src, target, opts, backend)
     elif backend in ["MLU"]:
         # torch_mlu only registers torch.mlu when initialization sees CPU.
         # The embedded C++ runtime has already activated MLU, so re-run

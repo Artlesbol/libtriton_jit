@@ -13,6 +13,13 @@ target_link_libraries(test_tuple_args PRIVATE TritonJIT::triton_jit)
 
 add_test(NAME tuple_args_cpp COMMAND test_tuple_args)
 add_test(
+    NAME compile_entry_python
+    COMMAND
+        ${Python_EXECUTABLE}
+        ${CMAKE_CURRENT_SOURCE_DIR}/test_standalone_compile_entry.py
+        ${PROJECT_SOURCE_DIR}/scripts/standalone_compile.py
+)
+add_test(
     NAME tuple_signature_python
     COMMAND
         ${CMAKE_COMMAND} -E env
