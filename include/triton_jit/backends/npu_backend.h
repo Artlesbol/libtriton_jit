@@ -26,8 +26,10 @@
 #include <fstream>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <vector>
 
@@ -78,6 +80,18 @@ struct NpuBackend {
                                       unsigned int shared_mem,
                                       const std::string& sig,
                                       size_t num_args) {
+    const char* prepared = std::getenv("TRITON_JIT_NPU_PREPARED_LAUNCH");
+    if (prepared != nullptr && std::string_view(prepared) == "1") {
+      return prepare_cached_launch(dir, name, shared_mem, sig, num_args);
+    }
+    return prepare_legacy_launch(dir, name, shared_mem, sig, num_args);
+  }
+
+  static LaunchOptions prepare_legacy_launch(const std::string& dir,
+                                             const std::string& name,
+                                             unsigned int shared_mem,
+                                             const std::string& sig,
+                                             size_t num_args) {
     const auto* metadata = get_kernel_metadata(dir, name);
     const auto* layout = (metadata && metadata->has_arg_layout()) ? &(metadata->arg_layout) : nullptr;
     size_t ws_size = metadata ? metadata->workspace_size : 0;
@@ -131,16 +145,19 @@ struct NpuBackend {
     }
 
     // Determine argument layout
-    std::vector<NpuArgInfo> layout;
+    std::vector<NpuArgInfo> parsed_layout;
+    const std::vector<NpuArgInfo>* layout_ptr = nullptr;
     if (!opts.signature.empty()) {
-      layout = parse_signature(opts.signature);
-      VLOG(1) << fmt::format("Parsed signature '{}' -> {} runtime args", opts.signature, layout.size());
-    } else if (opts.arg_layout != nullptr && !opts.arg_layout->empty()) {
-      layout = *opts.arg_layout;
-      VLOG(1) << fmt::format("Using metadata arg_layout with {} args", layout.size());
+      parsed_layout = parse_signature(opts.signature);
+      layout_ptr = &parsed_layout;
+      VLOG(1) << fmt::format("Parsed signature '{}' -> {} runtime args", opts.signature, parsed_layout.size());
+    } else if (opts.arg_layout != nullptr) {
+      layout_ptr = opts.arg_layout;
+      VLOG(1) << fmt::format("Using prepared arg_layout with {} args", layout_ptr->size());
     } else {
       throw std::runtime_error("launch_kernel: no signature or arg_layout provided");
     }
+    const auto& layout = *layout_ptr;
 
     if (opts.num_args != 0 && opts.num_args != layout.size()) {
       throw std::runtime_error(fmt::format("launch_kernel: arg count mismatch (layout={}, args={})",
@@ -395,6 +412,69 @@ struct NpuBackend {
     }
 
     return load_shared_memory(dir, kernel_name);
+  }
+
+  // Kernel metadata is immutable after load_kernel() publishes ModuleData;
+  // there is no module-unload API. Cache the resolved ABI per kernel object
+  // and launching thread, keeping runtime argument values out of the cache.
+  static LaunchOptions prepare_cached_launch(const std::string& dir,
+                                             const std::string& name,
+                                             unsigned int shared_mem,
+                                             const std::string& sig,
+                                             size_t num_args) {
+    struct Prepared {
+      std::string dir;
+      std::string name;
+      std::string signature;
+      std::vector<NpuArgInfo> layout;
+      size_t workspace_size = 0;
+      std::optional<bool> auto_blockify;
+      bool vector_kernel = false;
+      bool valid = false;
+    };
+    // TritonKernel owns dir. Validate values as well as its address so a
+    // destroyed/moved kernel object cannot reuse another kernel's options.
+    thread_local static std::unordered_map<const std::string*, Prepared> cache;
+    auto& state = cache[&dir];
+    if (!state.valid || state.dir != dir || state.name != name || state.signature != sig) {
+      const auto* metadata = get_kernel_metadata(dir, name);
+      if (metadata == nullptr || (sig.empty() && !metadata->has_arg_layout())) {
+        return prepare_legacy_launch(dir, name, shared_mem, sig, num_args);
+      }
+      Prepared next;
+      next.dir = dir;
+      next.name = name;
+      next.signature = sig;
+      // Keep the established signature-first precedence, including tuple
+      // flattening and constexpr removal. Metadata may describe another ABI.
+      next.layout = sig.empty() ? metadata->arg_layout : parse_signature(sig);
+      next.workspace_size = metadata->workspace_size;
+      next.auto_blockify = metadata->enable_auto_blockify;
+      next.vector_kernel = metadata->mix_mode == "aiv";
+      next.valid = true;
+      state = std::move(next);
+    }
+    bool auto_blockify = false;
+    if (state.auto_blockify.has_value()) {
+      auto_blockify = *state.auto_blockify;
+    } else {
+      // This environment setting is deliberately dynamic. Per-kernel
+      // metadata still takes precedence, exactly as in the legacy launcher.
+      const char* setting = std::getenv("TRITON_ALL_BLOCKS_PARALLEL");
+      std::string value = setting ? setting : "false";
+      std::transform(value.begin(), value.end(), value.begin(),
+                     [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+      auto_blockify = value == "true" || value == "1";
+    }
+    return {
+        .shared_memory = shared_mem,
+        .signature = {},
+        .arg_layout = &state.layout,
+        .num_args = num_args,
+        .workspace_size = state.workspace_size,
+        .enable_auto_blockify = auto_blockify,
+        .vector_kernel = state.vector_kernel,
+    };
   }
 
   /**

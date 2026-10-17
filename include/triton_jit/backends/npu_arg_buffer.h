@@ -20,6 +20,8 @@
 
 #pragma once
 
+#include <algorithm>
+#include <array>
 #include <cctype>
 #include <cstring>
 #include <stdexcept>
@@ -48,14 +50,14 @@ class NpuArgBuffer {
   static constexpr size_t USER_ARGS_OFFSET = SYSTEM_ARGS_SIZE;
 
   explicit NpuArgBuffer(size_t estimated_user_args = 64) {
-    buffer_.resize(SYSTEM_ARGS_SIZE + estimated_user_args + 16);
     cursor_ = USER_ARGS_OFFSET;
+    ensure_capacity(SYSTEM_ARGS_SIZE + estimated_user_args + 16);
   }
 
   void set_system_args(void* ffts, void* sync_lock, void* workspace) {
-    std::memcpy(buffer_.data() + 0, &ffts, sizeof(void*));
-    std::memcpy(buffer_.data() + 8, &sync_lock, sizeof(void*));
-    std::memcpy(buffer_.data() + 16, &workspace, sizeof(void*));
+    std::memcpy(data_bytes() + 0, &ffts, sizeof(void*));
+    std::memcpy(data_bytes() + 8, &sync_lock, sizeof(void*));
+    std::memcpy(data_bytes() + 16, &workspace, sizeof(void*));
   }
 
   template <typename T>
@@ -63,7 +65,7 @@ class NpuArgBuffer {
     size_t align = alignof(T);
     cursor_ = align_to(cursor_, align);
     ensure_capacity(cursor_ + sizeof(T));
-    std::memcpy(buffer_.data() + cursor_, &value, sizeof(T));
+    std::memcpy(data_bytes() + cursor_, &value, sizeof(T));
     cursor_ += sizeof(T);
   }
 
@@ -102,16 +104,16 @@ class NpuArgBuffer {
   void set_grid(int32_t gx, int32_t gy, int32_t gz) {
     cursor_ = align_to(cursor_, alignof(int32_t));
     ensure_capacity(cursor_ + 3 * sizeof(int32_t));
-    std::memcpy(buffer_.data() + cursor_, &gx, sizeof(int32_t));
+    std::memcpy(data_bytes() + cursor_, &gx, sizeof(int32_t));
     cursor_ += sizeof(int32_t);
-    std::memcpy(buffer_.data() + cursor_, &gy, sizeof(int32_t));
+    std::memcpy(data_bytes() + cursor_, &gy, sizeof(int32_t));
     cursor_ += sizeof(int32_t);
-    std::memcpy(buffer_.data() + cursor_, &gz, sizeof(int32_t));
+    std::memcpy(data_bytes() + cursor_, &gz, sizeof(int32_t));
     cursor_ += sizeof(int32_t);
   }
 
   void* data() {
-    return buffer_.data();
+    return data_bytes();
   }
   size_t size() const {
     return cursor_;
@@ -123,11 +125,20 @@ class NpuArgBuffer {
   }
 
   void ensure_capacity(size_t required) {
-    if (required > buffer_.size()) {
+    if (buffer_.empty()) {
+      if (required <= inline_buffer_.size()) return;
+      buffer_.resize(required + 32);
+      std::memcpy(buffer_.data(), inline_buffer_.data(), std::min(cursor_, inline_buffer_.size()));
+    } else if (required > buffer_.size()) {
       buffer_.resize(required + 32);
     }
   }
 
+  std::byte* data_bytes() {
+    return buffer_.empty() ? inline_buffer_.data() : buffer_.data();
+  }
+
+  std::array<std::byte, 256> inline_buffer_{};
   std::vector<std::byte> buffer_;
   size_t cursor_;
 };
