@@ -2,6 +2,12 @@ add_executable(test_launch_hooks test_launch_hooks.cpp)
 target_link_libraries(test_launch_hooks PRIVATE TritonJIT::triton_jit)
 add_test(NAME launch_hooks COMMAND test_launch_hooks)
 
+if(BACKEND STREQUAL "NPU")
+    add_executable(test_npu_signature_layout test_npu_signature_layout.cpp)
+    target_link_libraries(test_npu_signature_layout PRIVATE TritonJIT::triton_jit)
+    add_test(NAME npu_signature_layout COMMAND test_npu_signature_layout)
+endif()
+
 add_executable(test_tuple_args test_tuple_args.cpp)
 target_link_libraries(test_tuple_args PRIVATE TritonJIT::triton_jit)
 
