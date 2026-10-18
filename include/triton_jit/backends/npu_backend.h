@@ -73,6 +73,20 @@ struct NpuBackend {
   static inline std::unordered_map<std::string, size_t> registered_names_;
   static inline std::unordered_map<std::string, std::unique_ptr<size_t>> func_stubs_;
 
+  // Argument types depend on the complete compile signature, not on the stream,
+  // device, or argument values. Keep parsed layouts per host thread so repeated
+  // launches need neither a parser allocation nor a shared-cache lock. References
+  // to unordered_map values remain valid when other signatures are inserted.
+  static const std::vector<NpuArgInfo>& signature_layout(const std::string& signature) {
+    thread_local std::unordered_map<std::string, std::vector<NpuArgInfo>> layouts;
+    auto it = layouts.find(signature);
+    if (it == layouts.end()) {
+      auto parsed = parse_signature(signature);
+      it = layouts.emplace(signature, std::move(parsed)).first;
+    }
+    return it->second;
+  }
+
   static LaunchOptions prepare_launch(const std::string& dir,
                                       const std::string& name,
                                       unsigned int shared_mem,
@@ -131,16 +145,17 @@ struct NpuBackend {
     }
 
     // Determine argument layout
-    std::vector<NpuArgInfo> layout;
+    const std::vector<NpuArgInfo>* resolved_layout = nullptr;
     if (!opts.signature.empty()) {
-      layout = parse_signature(opts.signature);
-      VLOG(1) << fmt::format("Parsed signature '{}' -> {} runtime args", opts.signature, layout.size());
+      resolved_layout = &signature_layout(opts.signature);
+      VLOG(1) << fmt::format("Signature '{}' -> {} runtime args", opts.signature, resolved_layout->size());
     } else if (opts.arg_layout != nullptr && !opts.arg_layout->empty()) {
-      layout = *opts.arg_layout;
-      VLOG(1) << fmt::format("Using metadata arg_layout with {} args", layout.size());
+      resolved_layout = opts.arg_layout;
+      VLOG(1) << fmt::format("Using metadata arg_layout with {} args", resolved_layout->size());
     } else {
       throw std::runtime_error("launch_kernel: no signature or arg_layout provided");
     }
+    const auto& layout = *resolved_layout;
 
     if (opts.num_args != 0 && opts.num_args != layout.size()) {
       throw std::runtime_error(fmt::format("launch_kernel: arg count mismatch (layout={}, args={})",
