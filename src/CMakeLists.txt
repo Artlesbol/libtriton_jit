@@ -39,6 +39,13 @@ target_include_directories(triton_jit
 
 # Backend-specific link libraries
 if(BACKEND STREQUAL "NPU")
+    option(TRITON_JIT_NPU_VERBOSE_LAUNCH "Compile NPU verbose launch diagnostics" OFF)
+    if(NOT TRITON_JIT_NPU_VERBOSE_LAUNCH)
+        # The non-glog C10 default still constructs VLOG messages that the
+        # runtime discards. Suppress their construction at compile time;
+        # keep INFO, warning and error diagnostics available.
+        target_compile_definitions(triton_jit PUBLIC CAFFE2_LOG_THRESHOLD=0)
+    endif()
     target_link_libraries(triton_jit
       PUBLIC Torch::Torch Ascend::ascendcl Ascend::runtime fmt::fmt-header-only
       PRIVATE pybind11::embed)
