@@ -41,6 +41,7 @@ struct HcuBackend {
 
   // HCU warp size is always 64 threads (same as AMD GCN/CDNA)
   static constexpr unsigned int WARP_SIZE = 64;
+  static constexpr bool cache_launch_device = false;
 
   struct LaunchOptions {
     unsigned int shared_memory = 0;

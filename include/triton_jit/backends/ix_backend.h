@@ -46,6 +46,7 @@ struct IxBackend {
 
   // IX (Tianshu) warp size is 64 threads
   static constexpr unsigned int WARP_SIZE = 64;
+  static constexpr bool cache_launch_device = false;
 
   struct LaunchOptions {
     unsigned int shared_memory = 0;

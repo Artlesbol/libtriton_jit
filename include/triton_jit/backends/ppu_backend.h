@@ -38,6 +38,7 @@ struct PpuBackend {
 
   // PPU warp size: the FlagTree ppu driver launches with blockDimX = 32 * num_warps
   static constexpr unsigned int WARP_SIZE = 32;
+  static constexpr bool cache_launch_device = false;
 
   struct LaunchOptions {
     unsigned int shared_memory = 0;

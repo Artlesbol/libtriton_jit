@@ -52,6 +52,7 @@ struct NpuBackend {
 
   // NPU does not use warp concept, but we need a non-zero value for block size calculation
   static constexpr unsigned int WARP_SIZE = 1;
+  static constexpr bool cache_launch_device = true;
 
   static bool env_truthy(const char* value) {
     if (value == nullptr) return false;

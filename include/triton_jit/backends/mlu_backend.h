@@ -52,6 +52,7 @@ struct MluBackend {
 
   // MLU does not use this parameter, but keep this for compatibility.
   static constexpr unsigned int WARP_SIZE = 1;
+  static constexpr bool cache_launch_device = false;
 
   struct LaunchOptions {
     unsigned int shared_memory = 0;

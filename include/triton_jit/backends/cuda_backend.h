@@ -46,6 +46,7 @@ struct CudaBackend {
 
   // CUDA warp size is 32 threads
   static constexpr unsigned int WARP_SIZE = 32;
+  static constexpr bool cache_launch_device = false;
 
   struct LaunchOptions {
     unsigned int shared_memory = 0;

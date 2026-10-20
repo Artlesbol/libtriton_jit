@@ -51,6 +51,7 @@ struct MusaBackend {
   // MUSA warp size: Triton MUSA backend uses 32, matching CUDA convention
   // Note: Actual MUSA hardware may have different warp size, but Triton compiles with 32
   static constexpr unsigned int WARP_SIZE = 32;
+  static constexpr bool cache_launch_device = false;
 
   struct LaunchOptions {
     unsigned int shared_memory = 0;
