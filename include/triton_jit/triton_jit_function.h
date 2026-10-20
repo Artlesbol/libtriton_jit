@@ -447,8 +447,25 @@ class TritonJITFunctionImpl {
     };
     thread_local static std::unordered_map<const TritonJITFunctionImpl*, CacheEntry> tl_cache;
     auto& entry = tl_cache[this];
-    Backend::ensure_context();
-    int device_index = Backend::get_device_index();
+    // Cache the device/context per thread and stream. The context check and
+    // aclrtGetDevice are hot-path ACL round trips; a stream belongs to one
+    // context, so the repeated-launch case can skip them. A new stream
+    // (including another device) refreshes the state. Default/null streams
+    // always refresh because they are shared across devices.
+    struct LaunchDeviceState {
+      typename Backend::StreamType stream{};
+      int device_index = -1;
+      bool ready = false;
+    };
+    thread_local static LaunchDeviceState launch_device;
+    const bool default_stream = stream == typename Backend::StreamType{};
+    if (!launch_device.ready || launch_device.stream != stream || default_stream) {
+      Backend::ensure_context();
+      launch_device.device_index = Backend::get_device_index();
+      launch_device.stream = stream;
+      launch_device.ready = true;
+    }
+    int device_index = launch_device.device_index;
     KernelPtr cached_kernel = nullptr;
     if (entry.kernel != nullptr && entry.device_index == device_index &&
         entry.num_warps == static_cast<int>(num_warps) &&

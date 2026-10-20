@@ -53,6 +53,24 @@ struct NpuBackend {
   // NPU does not use warp concept, but we need a non-zero value for block size calculation
   static constexpr unsigned int WARP_SIZE = 1;
 
+  static bool env_truthy(const char* value) {
+    if (value == nullptr) return false;
+    if (value[0] == '1' && value[1] == '\0') return true;
+    const char* expected = "true";
+    for (size_t i = 0; i < 4; ++i) {
+      if (value[i] == '\0' ||
+          std::tolower(static_cast<unsigned char>(value[i])) != expected[i]) {
+        return false;
+      }
+    }
+    return value[4] == '\0';
+  }
+
+  static bool prepared_launch_enabled() {
+    const char* value = std::getenv("TRITON_JIT_NPU_PREPARED_LAUNCH");
+    return value != nullptr && std::string_view(value) == "1";
+  }
+
   struct LaunchOptions {
     unsigned int shared_memory = 0;
     std::string signature;
@@ -98,11 +116,7 @@ struct NpuBackend {
     // Match FlagTree Ascend's launcher: per-kernel metadata takes precedence
     // over TRITON_ALL_BLOCKS_PARALLEL. Ordinary kernels need the full logical
     // grid; only auto-blockified kernels loop over the remaining programs.
-    const char* setting = std::getenv("TRITON_ALL_BLOCKS_PARALLEL");
-    std::string value = setting ? setting : "false";
-    std::transform(value.begin(), value.end(), value.begin(),
-                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-    bool auto_blockify = value == "true" || value == "1";
+    bool auto_blockify = env_truthy(std::getenv("TRITON_ALL_BLOCKS_PARALLEL"));
     if (metadata && metadata->enable_auto_blockify.has_value()) {
       auto_blockify = *metadata->enable_auto_blockify;
     }
@@ -135,13 +149,32 @@ struct NpuBackend {
                             const LaunchOptions& opts) {
     uint32_t blockNum = grid_x * grid_y * grid_z;
 
-    // Get system control address
-    rtError_t ret;
+    // The C2C control address is constant for a device/context. Cache it per
+    // stream under the prepared-launch path; the stream identifies the
+    // context. Default/null streams always refresh because they are shared
+    // across devices.
+    struct FftsCache {
+      aclrtStream stream = nullptr;
+      void* addr = nullptr;
+      bool ready = false;
+    };
+    thread_local static FftsCache ffts_cache;
+    const bool default_stream = stream == nullptr;
     void* ffts_addr = nullptr;
-    uint32_t ffts_len;
-    ret = rtGetC2cCtrlAddr((uint64_t*)&ffts_addr, &ffts_len);
-    if (ret != RT_ERROR_NONE) {
-      throw std::runtime_error(fmt::format("rtGetC2cCtrlAddr failed: {}", static_cast<int>(ret)));
+    if (prepared_launch_enabled() && !default_stream && ffts_cache.ready &&
+        ffts_cache.stream == stream) {
+      ffts_addr = ffts_cache.addr;
+    } else {
+      uint32_t ffts_len;
+      rtError_t ret = rtGetC2cCtrlAddr((uint64_t*)&ffts_addr, &ffts_len);
+      if (ret != RT_ERROR_NONE) {
+        throw std::runtime_error(fmt::format("rtGetC2cCtrlAddr failed: {}", static_cast<int>(ret)));
+      }
+      if (prepared_launch_enabled()) {
+        ffts_cache.stream = stream;
+        ffts_cache.addr = ffts_addr;
+        ffts_cache.ready = true;
+      }
     }
 
     // Determine argument layout
@@ -463,11 +496,7 @@ struct NpuBackend {
     } else {
       // This environment setting is deliberately dynamic. Per-kernel
       // metadata still takes precedence, exactly as in the legacy launcher.
-      const char* setting = std::getenv("TRITON_ALL_BLOCKS_PARALLEL");
-      std::string value = setting ? setting : "false";
-      std::transform(value.begin(), value.end(), value.begin(),
-                     [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-      auto_blockify = value == "true" || value == "1";
+      auto_blockify = env_truthy(std::getenv("TRITON_ALL_BLOCKS_PARALLEL"));
     }
     return {
         .shared_memory = shared_mem,
