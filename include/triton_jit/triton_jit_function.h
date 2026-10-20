@@ -496,6 +496,19 @@ class TritonJITFunctionImpl {
         grid_x, grid_y, grid_z, num_warps, stream, args, full_signature, num_args);
   }
 
+  auto prepare_direct_launch(const std::string& full_signature,
+                             unsigned int num_warps,
+                             unsigned int num_stages) const {
+    Backend::ensure_context();
+    int device_index = Backend::get_device_index();
+    CompileOptions copts;
+    copts.num_warps = static_cast<int>(num_warps);
+    copts.num_stages = static_cast<int>(num_stages);
+    const TritonKernelImpl<Backend>& kernel =
+        this->get_kernel(full_signature, copts, device_index);
+    return kernel.prepare_direct_launch(full_signature);
+  }
+
   /// Pre-compile the kernel without launching.
   /// Useful during plan creation to ensure first exec does not trigger Python compilation.
   void compile(std::string full_signature,

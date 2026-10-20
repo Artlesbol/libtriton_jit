@@ -82,6 +82,17 @@ struct NpuBackend {
     bool vector_kernel = true;
   };
 
+  // Fully prepared launch state: the hot path only packs user args and calls
+  // rtKernelLaunch. Created once per kernel/signature by the caller.
+  struct DirectLaunch {
+    void* kernel = nullptr;
+    std::vector<NpuArgInfo> layout;
+    size_t workspace_size = 0;
+    bool enable_auto_blockify = false;
+    bool vector_kernel = true;
+    void launch(aclrtStream stream, unsigned gx, unsigned gy, unsigned gz, void** args) const;
+  };
+
   struct ModuleData {
     void* bin_handle;
     void* fn_handle;
@@ -138,6 +149,24 @@ struct NpuBackend {
     };
   }
 
+  static DirectLaunch make_direct_launch(const std::string& dir,
+                                         const std::string& name,
+                                         const std::string& sig,
+                                         unsigned int shared_mem) {
+    LaunchOptions opts = prepare_launch(dir, name, shared_mem, sig, 0);
+    DirectLaunch direct;
+    direct.kernel = load_kernel(dir, name);
+    if (!opts.signature.empty()) {
+      direct.layout = parse_signature(opts.signature);
+    } else if (opts.arg_layout != nullptr) {
+      direct.layout = *opts.arg_layout;
+    }
+    direct.workspace_size = opts.workspace_size;
+    direct.enable_auto_blockify = opts.enable_auto_blockify;
+    direct.vector_kernel = opts.vector_kernel;
+    return direct;
+  }
+
   static void launch_kernel(aclrtStream stream,
                             void* kernel,
                             unsigned grid_x,
@@ -148,6 +177,44 @@ struct NpuBackend {
                             unsigned block_z,
                             void** args,
                             const LaunchOptions& opts) {
+    (void)block_x;
+    (void)block_y;
+    (void)block_z;
+    // Determine argument layout
+    std::vector<NpuArgInfo> parsed_layout;
+    const std::vector<NpuArgInfo>* layout_ptr = nullptr;
+    if (!opts.signature.empty()) {
+      parsed_layout = parse_signature(opts.signature);
+      layout_ptr = &parsed_layout;
+      VLOG(1) << fmt::format("Parsed signature '{}' -> {} runtime args", opts.signature, parsed_layout.size());
+    } else if (opts.arg_layout != nullptr) {
+      layout_ptr = opts.arg_layout;
+      VLOG(1) << fmt::format("Using prepared arg_layout with {} args", layout_ptr->size());
+    } else {
+      throw std::runtime_error("launch_kernel: no signature or arg_layout provided");
+    }
+    const auto& layout = *layout_ptr;
+
+    if (opts.num_args != 0 && opts.num_args != layout.size()) {
+      throw std::runtime_error(fmt::format("launch_kernel: arg count mismatch (layout={}, args={})",
+                                           layout.size(),
+                                           opts.num_args));
+    }
+
+    launch_prepared(stream, kernel, grid_x, grid_y, grid_z, args, layout,
+                    opts.workspace_size, opts.enable_auto_blockify, opts.vector_kernel);
+  }
+
+  static void launch_prepared(aclrtStream stream,
+                              void* kernel,
+                              unsigned grid_x,
+                              unsigned grid_y,
+                              unsigned grid_z,
+                              void** args,
+                              const std::vector<NpuArgInfo>& layout,
+                              size_t workspace_size,
+                              bool enable_auto_blockify,
+                              bool vector_kernel) {
     uint32_t blockNum = grid_x * grid_y * grid_z;
 
     // The C2C control address is constant for a device/context. Cache it per
@@ -178,34 +245,13 @@ struct NpuBackend {
       }
     }
 
-    // Determine argument layout
-    std::vector<NpuArgInfo> parsed_layout;
-    const std::vector<NpuArgInfo>* layout_ptr = nullptr;
-    if (!opts.signature.empty()) {
-      parsed_layout = parse_signature(opts.signature);
-      layout_ptr = &parsed_layout;
-      VLOG(1) << fmt::format("Parsed signature '{}' -> {} runtime args", opts.signature, parsed_layout.size());
-    } else if (opts.arg_layout != nullptr) {
-      layout_ptr = opts.arg_layout;
-      VLOG(1) << fmt::format("Using prepared arg_layout with {} args", layout_ptr->size());
-    } else {
-      throw std::runtime_error("launch_kernel: no signature or arg_layout provided");
-    }
-    const auto& layout = *layout_ptr;
-
-    if (opts.num_args != 0 && opts.num_args != layout.size()) {
-      throw std::runtime_error(fmt::format("launch_kernel: arg count mismatch (layout={}, args={})",
-                                           layout.size(),
-                                           opts.num_args));
-    }
-
     // Build argument buffer dynamically
     NpuArgBuffer arg_buffer(layout.size() * 8 + 16);
 
     // 1. Allocate workspace if needed
     void* workspace_addr = nullptr;
-    if (opts.workspace_size > 0) {
-      size_t total_workspace = opts.workspace_size * blockNum;
+    if (workspace_size > 0) {
+      size_t total_workspace = workspace_size * blockNum;
       rtError_t ws_ret = rtMalloc(&workspace_addr, total_workspace, RT_MEMORY_HBM, 0);
       if (ws_ret != RT_ERROR_NONE) {
         throw std::runtime_error(fmt::format("rtMalloc workspace failed: {}, requested {} bytes",
@@ -214,7 +260,7 @@ struct NpuBackend {
       }
       VLOG(1) << fmt::format("NPU workspace allocated: {} bytes ({} per block x {} blocks)",
                              total_workspace,
-                             opts.workspace_size,
+                             workspace_size,
                              blockNum);
     }
 
@@ -252,17 +298,17 @@ struct NpuBackend {
         grid_x,
         grid_y,
         grid_z,
-        workspace_addr ? fmt::format("{}B", opts.workspace_size * blockNum) : "none");
+        workspace_addr ? fmt::format("{}B", workspace_size * blockNum) : "none");
 
     // A physical-core clamp without compiler-generated auto-blockify loops
     // silently drops all logical programs beyond the clamp.
-    if (opts.enable_auto_blockify) {
+    if (enable_auto_blockify) {
       uint32_t ai_core_cnt = 0;
       if (rtGetAiCoreCount(&ai_core_cnt) != RT_ERROR_NONE || ai_core_cnt == 0) {
         if (workspace_addr) rtFree(workspace_addr);
         throw std::runtime_error("Cannot determine physical block count for auto-blockified kernel");
       }
-      blockNum = std::min(blockNum, ai_core_cnt * (opts.vector_kernel ? 2u : 1u));
+      blockNum = std::min(blockNum, ai_core_cnt * (vector_kernel ? 2u : 1u));
     }
 
     // Launch kernel
@@ -526,6 +572,15 @@ struct NpuBackend {
     return nullptr;
   }
 };
+
+inline void NpuBackend::DirectLaunch::launch(aclrtStream stream,
+                                             unsigned gx,
+                                             unsigned gy,
+                                             unsigned gz,
+                                             void** args) const {
+  NpuBackend::launch_prepared(stream, kernel, gx, gy, gz, args, layout,
+                              workspace_size, enable_auto_blockify, vector_kernel);
+}
 
 static_assert(BackendPolicy<NpuBackend>, "NpuBackend must satisfy BackendPolicy concept");
 
