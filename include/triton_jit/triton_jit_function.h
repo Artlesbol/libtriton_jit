@@ -497,29 +497,38 @@ class TritonJITFunctionImpl {
   }
 
   auto prepare_direct_launch(const std::string& full_signature,
-                             unsigned int num_warps,
-                             unsigned int num_stages) const {
+                             const CompileOptions& copts) const {
     Backend::ensure_context();
-    int device_index = Backend::get_device_index();
-    CompileOptions copts;
-    copts.num_warps = static_cast<int>(num_warps);
-    copts.num_stages = static_cast<int>(num_stages);
     const TritonKernelImpl<Backend>& kernel =
-        this->get_kernel(full_signature, copts, device_index);
+        this->get_kernel(full_signature, copts, Backend::get_device_index());
     return kernel.prepare_direct_launch(full_signature);
   }
 
-  /// Pre-compile the kernel without launching.
-  /// Useful during plan creation to ensure first exec does not trigger Python compilation.
+  auto prepare_direct_launch(const std::string& full_signature,
+                             unsigned int num_warps,
+                             unsigned int num_stages) const {
+    CompileOptions copts;
+    copts.num_warps = static_cast<int>(num_warps);
+    copts.num_stages = static_cast<int>(num_stages);
+    return prepare_direct_launch(full_signature,copts);
+  }
+
+  /// Pre-compile with the same backend options used to prepare native dispatch.
+  void compile(std::string full_signature,
+               const CompileOptions& copts,
+               int device_index) const {
+    Backend::ensure_context();
+    this->get_kernel(full_signature,copts,device_index);
+  }
+
   void compile(std::string full_signature,
                unsigned int num_warps,
                unsigned int num_stages,
                int device_index) const {
-    Backend::ensure_context();
     CompileOptions copts;
     copts.num_warps = static_cast<int>(num_warps);
     copts.num_stages = static_cast<int>(num_stages);
-    this->get_kernel(full_signature, copts, device_index);
+    compile(std::move(full_signature),copts,device_index);
   }
 
  private:
