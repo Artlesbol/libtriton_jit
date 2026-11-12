@@ -194,6 +194,30 @@ struct HcuBackend {
     return load_shared_memory(dir, kernel_name);
   }
 
+  // Reuse the module and LDS metadata prepared by TritonKernelImpl. Explicit
+  // stream dispatch then needs only the grid, block size and argument values.
+  struct DirectLaunch {
+    KernelHandle function;
+    LaunchOptions options;
+
+    void launch(StreamType stream,
+                unsigned int grid_x,
+                unsigned int grid_y,
+                unsigned int grid_z,
+                unsigned int num_warps,
+                void** args) const {
+      HcuBackend::launch_kernel(stream, function, grid_x, grid_y, grid_z,
+                                num_warps * WARP_SIZE, 1, 1, args, options);
+    }
+  };
+
+  static DirectLaunch make_direct_launch(const std::string& dir,
+                                         const std::string& name,
+                                         const std::string& /*signature*/,
+                                         unsigned int shared_memory) {
+    return {load_kernel(dir, name), {.shared_memory = shared_memory}};
+  }
+
  private:
   static void configure_shared_memory(hipFunction_t /*kernel*/, int device_id, unsigned int required_shared) {
     // Module-loaded kernels pass dynamic shared memory via hipModuleLaunchKernel's
@@ -215,5 +239,6 @@ struct HcuBackend {
 };
 
 static_assert(BackendPolicy<HcuBackend>, "HcuBackend must satisfy BackendPolicy concept");
+static_assert(DirectLaunchBackend<HcuBackend>, "HcuBackend supports prepared native dispatch");
 
 }  // namespace triton_jit
