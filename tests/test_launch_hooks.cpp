@@ -136,7 +136,7 @@ static_assert(triton_jit::DirectLaunchBackend<FakeDirectBackend>);
 static_assert(HasKernelDirectLaunch<FakeDirectBackend>);
 static_assert(HasFunctionDirectLaunch<FakeDirectBackend>);
 
-#ifdef BACKEND_NPU
+#if defined(BACKEND_NPU) || defined(BACKEND_HCU)
 static_assert(HasFunctionDirectLaunch<triton_jit::DefaultBackend>);
 #else
 static_assert(!HasFunctionDirectLaunch<triton_jit::DefaultBackend>);
