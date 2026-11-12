@@ -19,6 +19,7 @@
 // SOFTWARE.
 
 #include "triton_jit/triton_kernel.h"
+#include "triton_jit/triton_jit_function.h"
 
 #include <atomic>
 #include <exception>
@@ -103,6 +104,43 @@ struct FakeBackend {
 };
 
 static_assert(triton_jit::BackendPolicy<FakeBackend>);
+
+struct FakeDirectBackend : FakeBackend {
+  struct DirectLaunch {};
+
+  static DirectLaunch make_direct_launch(const std::string&,
+                                         const std::string&,
+                                         const std::string&,
+                                         unsigned int) {
+    return {};
+  }
+};
+
+template <typename Backend>
+concept HasKernelDirectLaunch = requires(const triton_jit::TritonKernelImpl<Backend>& kernel) {
+  kernel.prepare_direct_launch("*fp32:16");
+};
+
+template <typename Backend>
+concept HasFunctionDirectLaunch = requires(
+    const triton_jit::TritonJITFunctionImpl<Backend>& function,
+    const triton_jit::CompileOptions& options) {
+  function.prepare_direct_launch("*fp32:16", options);
+  function.prepare_direct_launch("*fp32:16", 4, 1);
+};
+
+static_assert(!triton_jit::DirectLaunchBackend<FakeBackend>);
+static_assert(!HasKernelDirectLaunch<FakeBackend>);
+static_assert(!HasFunctionDirectLaunch<FakeBackend>);
+static_assert(triton_jit::DirectLaunchBackend<FakeDirectBackend>);
+static_assert(HasKernelDirectLaunch<FakeDirectBackend>);
+static_assert(HasFunctionDirectLaunch<FakeDirectBackend>);
+
+#ifdef BACKEND_NPU
+static_assert(HasFunctionDirectLaunch<triton_jit::DefaultBackend>);
+#else
+static_assert(!HasFunctionDirectLaunch<triton_jit::DefaultBackend>);
+#endif
 
 using FakeKernel = triton_jit::TritonKernelImpl<FakeBackend>;
 

@@ -497,7 +497,8 @@ class TritonJITFunctionImpl {
   }
 
   auto prepare_direct_launch(const std::string& full_signature,
-                             const CompileOptions& copts) const {
+                             const CompileOptions& copts) const
+    requires DirectLaunchBackend<Backend> {
     Backend::ensure_context();
     const TritonKernelImpl<Backend>& kernel =
         this->get_kernel(full_signature, copts, Backend::get_device_index());
@@ -506,7 +507,8 @@ class TritonJITFunctionImpl {
 
   auto prepare_direct_launch(const std::string& full_signature,
                              unsigned int num_warps,
-                             unsigned int num_stages) const {
+                             unsigned int num_stages) const
+    requires DirectLaunchBackend<Backend> {
     CompileOptions copts;
     copts.num_warps = static_cast<int>(num_warps);
     copts.num_stages = static_cast<int>(num_stages);

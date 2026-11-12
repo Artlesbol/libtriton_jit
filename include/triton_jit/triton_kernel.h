@@ -180,7 +180,8 @@ class TritonKernelImpl {
 
   // Capture the full launch state once. The returned handle packs user args
   // and calls rtKernelLaunch directly, bypassing metadata parsing and hooks.
-  auto prepare_direct_launch(const std::string& signature) const {
+  auto prepare_direct_launch(const std::string& signature) const
+    requires DirectLaunchBackend<Backend> {
     lazy_init_handle();
     return std::make_shared<typename Backend::DirectLaunch>(
         Backend::make_direct_launch(dir_, kernel_name_, signature, cached_shared_memory_));

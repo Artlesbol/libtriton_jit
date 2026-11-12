@@ -67,4 +67,18 @@ concept BackendPolicy = requires {
   { T::prepare_launch(dir, name, shared_mem, sig, num_args) } -> std::same_as<typename T::LaunchOptions>;
 };
 
+// Prepared native dispatch is optional. Explicit instantiation of the common
+// JIT wrapper must not require it from backends that use ordinary launches.
+template <typename T>
+concept DirectLaunchBackend = BackendPolicy<T>
+&&requires(const std::string& dir,
+           const std::string& name,
+           const std::string& signature,
+           unsigned int shared_memory) {
+  typename T::DirectLaunch;
+  {
+    T::make_direct_launch(dir, name, signature, shared_memory)
+  } -> std::same_as<typename T::DirectLaunch>;
+};
+
 }  // namespace triton_jit
